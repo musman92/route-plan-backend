@@ -6,6 +6,7 @@ from apps.risk.rules import (
     classify_rain,
     classify_snow,
     classify_wind,
+    explain_recommendation,
     owned_miles,
     recommendation_key,
     score_checkpoints,
@@ -125,3 +126,46 @@ class RankingTests(SimpleTestCase):
             ordered,
             ["milder", "slower_mild", "high", "severe", "no_travel", "unscored"],
         )
+
+
+class RecommendationReasonTests(SimpleTestCase):
+    def test_reason_names_the_first_rule_that_differs(self):
+        severe = score_checkpoints([(0, Risk.SEVERE), (100, Risk.LOW)])
+        high = score_checkpoints([(0, Risk.HIGH), (10, Risk.LOW)])
+        mild = score_checkpoints([(0, Risk.MODERATE), (10, Risk.LOW)])
+        slower = score_checkpoints([(0, Risk.MODERATE), (10, Risk.LOW)])
+
+        winner, reason = explain_recommendation(
+            [(severe, 100), (high, 100), (mild, 90), (slower, 120)]
+        )
+        self.assertEqual(winner, 2)
+        self.assertEqual(reason, "It has the fewest severe miles.")
+
+    def test_travel_time_breaks_a_weather_tie(self):
+        calm = score_checkpoints([(0, Risk.LOW), (10, Risk.LOW)])
+        also_calm = score_checkpoints([(0, Risk.LOW), (10, Risk.LOW)])
+        winner, reason = explain_recommendation([(calm, 100), (also_calm, 50)])
+        self.assertEqual(winner, 1)
+        self.assertEqual(reason, "It has the shortest travel time.")
+
+    def test_no_travel_miles_outrank_severe_miles(self):
+        blocked = score_checkpoints([(0, Risk.NO_TRAVEL), (10, Risk.LOW)])
+        severe = score_checkpoints([(0, Risk.SEVERE), (10, Risk.LOW)])
+        winner, reason = explain_recommendation([(blocked, 60), (severe, 120)])
+        self.assertEqual(winner, 1)
+        self.assertEqual(reason, "It has the fewest miles where travel is not advised.")
+
+    def test_missing_forecast_is_not_recommended(self):
+        missing = score_checkpoints([(0, None), (10, None)])
+        calm = score_checkpoints([(0, Risk.LOW), (10, Risk.LOW)])
+        winner, reason = explain_recommendation([(missing, 10), (calm, 100)])
+        self.assertEqual(winner, 1)
+        self.assertEqual(reason, "It is the only route with forecast coverage.")
+        self.assertEqual(explain_recommendation([(missing, 10), (missing, 20)]), (None, None))
+
+    def test_exact_tie_keeps_the_first_route(self):
+        calm = score_checkpoints([(0, Risk.LOW), (10, Risk.LOW)])
+        also_calm = score_checkpoints([(0, Risk.LOW), (10, Risk.LOW)])
+        winner, reason = explain_recommendation([(calm, 100), (also_calm, 100)])
+        self.assertEqual(winner, 0)
+        self.assertEqual(reason, "It matches the other routes on weather and travel time.")

@@ -6,12 +6,17 @@ from datetime import datetime, timezone
 
 import requests
 
+from apps.ttlcache import TtlCache
+
 logger = logging.getLogger(__name__)
 
 USER_AGENT = "weather-aware-truck-routing/1.0"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 BATCH_SIZE = 50
 FORECAST_DAYS = 7
+CACHE_SECONDS = 15 * 60
+
+_forecast_cache: TtlCache[HourlyForecast] = TtlCache(CACHE_SECONDS)
 
 
 class WeatherError(Exception):
@@ -55,12 +60,26 @@ def location_key(lat: float, lon: float) -> tuple[float, float]:
     return (round(lat, 4), round(lon, 4))
 
 
+def clear_cache() -> None:
+    _forecast_cache.clear()
+
+
 def fetch_forecasts(points: list[tuple[float, float]]) -> dict[tuple[float, float], HourlyForecast]:
     unique = list(dict.fromkeys(location_key(lat, lon) for lat, lon in points))
     forecasts: dict[tuple[float, float], HourlyForecast] = {}
-    for start in range(0, len(unique), BATCH_SIZE):
-        batch = unique[start : start + BATCH_SIZE]
-        forecasts.update(_fetch_batch(batch))
+    missing: list[tuple[float, float]] = []
+    for key in unique:
+        cached = _forecast_cache.get(key)
+        if cached is None:
+            missing.append(key)
+        else:
+            forecasts[key] = cached
+    for start in range(0, len(missing), BATCH_SIZE):
+        batch = missing[start : start + BATCH_SIZE]
+        fetched = _fetch_batch(batch)
+        for key, forecast in fetched.items():
+            _forecast_cache.set(key, forecast)
+        forecasts.update(fetched)
     return forecasts
 
 

@@ -155,8 +155,10 @@ def score_checkpoints(markers: list[tuple[float, Risk | None]]) -> RouteScore:
 def recommendation_key(score: RouteScore, duration_seconds: float) -> tuple[float, ...]:
     """No-travel miles rank first because that level is worse than severe.
 
-    A route with no scored weather sorts after every scored route so a missing
-    forecast is not treated as zero risk.
+    The brief lists severe miles, high miles, average risk, then travel time.
+    No-travel miles are checked before severe miles so a blocked road cannot win
+    just by having fewer severe miles. A route with no scored weather sorts
+    after every scored route, so a missing forecast is not treated as zero risk.
     """
     average = score.average_risk
     unscored = 0.0 if average is not None else 1.0
@@ -168,3 +170,32 @@ def recommendation_key(score: RouteScore, duration_seconds: float) -> tuple[floa
         average if average is not None else math.inf,
         duration_seconds,
     )
+
+
+_REASON_BY_COMPONENT = {
+    1: "It has the fewest miles where travel is not advised.",
+    2: "It has the fewest severe miles.",
+    3: "It has the fewest high-risk miles.",
+    4: "It has the lowest average risk.",
+    5: "It has the shortest travel time.",
+}
+
+
+def explain_recommendation(
+    entries: list[tuple[RouteScore, float]],
+) -> tuple[int | None, str | None]:
+    """Pick the winning route and the first ranking rule that decided it."""
+    if not entries:
+        return None, None
+    keys = [recommendation_key(score, duration) for score, duration in entries]
+    winner = min(range(len(keys)), key=keys.__getitem__)
+    if entries[winner][0].average_risk is None:
+        return None, None
+    scored = [index for index, (score, _) in enumerate(entries) if score.average_risk is not None]
+    if len(scored) == 1:
+        return winner, "It is the only route with forecast coverage."
+    winner_key = keys[winner]
+    for component, reason in _REASON_BY_COMPONENT.items():
+        if any(winner_key[component] != keys[other][component] for other in scored):
+            return winner, reason
+    return winner, "It matches the other routes on weather and travel time."

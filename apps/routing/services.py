@@ -1,17 +1,25 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 
 import requests
 
 from apps.routing.geometry import Track, overlap_ratio, track_from_steps, via_points
+from apps.ttlcache import TtlCache
 
 logger = logging.getLogger(__name__)
 
 USER_AGENT = "weather-aware-truck-routing/1.0"
 OSRM_URL = "https://router.project-osrm.org/route/v1/driving"
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+CACHE_SECONDS = 15 * 60
+MAX_VIA_REQUESTS = 8
+
+_geocode_cache: TtlCache[Place] = TtlCache(CACHE_SECONDS)
+_route_cache: TtlCache[list[RouteOption]] = TtlCache(CACHE_SECONDS)
+_last_nominatim = 0.0
 
 
 class RoutingError(Exception):
@@ -34,7 +42,34 @@ class RouteOption:
     track: Track
 
 
+def clear_caches() -> None:
+    global _last_nominatim
+    _geocode_cache.clear()
+    _route_cache.clear()
+    _last_nominatim = 0.0
+
+
 def geocode(query: str) -> Place:
+    key = " ".join(query.lower().split())
+    cached = _geocode_cache.get(key)
+    if cached is not None:
+        return cached
+    place = _geocode(query)
+    return _geocode_cache.set(key, place)
+
+
+def _pace_nominatim() -> None:
+    """Nominatim asks for at most one request per second."""
+    global _last_nominatim
+    if _last_nominatim:
+        wait = 1.0 - (time.monotonic() - _last_nominatim)
+        if wait > 0:
+            time.sleep(wait)
+    _last_nominatim = time.monotonic()
+
+
+def _geocode(query: str) -> Place:
+    _pace_nominatim()
     try:
         response = requests.get(
             NOMINATIM_URL,
@@ -54,6 +89,20 @@ def geocode(query: str) -> Place:
 
 
 def fetch_routes(origin: Place, destination: Place) -> list[RouteOption]:
+    key = (
+        round(origin.lat, 4),
+        round(origin.lon, 4),
+        round(destination.lat, 4),
+        round(destination.lon, 4),
+    )
+    cached = _route_cache.get(key)
+    if cached is not None:
+        return cached
+    routes = _fetch_routes(origin, destination)
+    return _route_cache.set(key, routes)
+
+
+def _fetch_routes(origin: Place, destination: Place) -> list[RouteOption]:
     direct = _driving_routes(
         [(origin.lon, origin.lat), (destination.lon, destination.lat)],
         alternatives=2,
@@ -64,27 +113,36 @@ def fetch_routes(origin: Place, destination: Place) -> list[RouteOption]:
 
     primary_miles = routes[0].track.distance_miles
     fallback: tuple[float, RouteOption] | None = None
-    for via_lon, via_lat in via_points(routes[0].track):
-        try:
-            candidates = _driving_routes(
-                [(origin.lon, origin.lat), (via_lon, via_lat), (destination.lon, destination.lat)],
-                alternatives=0,
-            )
-        except RoutingError:
-            logger.warning("Via-route request failed", exc_info=True)
-            continue
-        for candidate in candidates:
-            if candidate.track.distance_miles > primary_miles * 1.45:
+    attempts = 0
+    for scale in (1.0, 1.8):
+        for via_lon, via_lat in via_points(routes[0].track, scale):
+            if attempts >= MAX_VIA_REQUESTS:
+                break
+            attempts += 1
+            try:
+                candidates = _driving_routes(
+                    [(origin.lon, origin.lat), (via_lon, via_lat), (destination.lon, destination.lat)],
+                    alternatives=0,
+                )
+            except RoutingError:
+                logger.warning("Via-route request failed", exc_info=True)
                 continue
-            overlap = max(overlap_ratio(candidate.track, existing.track) for existing in routes)
-            if overlap < 0.72:
-                routes.append(candidate)
-                if len(routes) >= 3:
-                    return routes[:3]
-            elif fallback is None or overlap < fallback[0]:
-                fallback = (overlap, candidate)
+            for candidate in candidates:
+                if candidate.track.distance_miles > primary_miles * 1.45:
+                    continue
+                overlap = max(overlap_ratio(candidate.track, existing.track) for existing in routes)
+                if overlap < 0.72:
+                    routes.append(candidate)
+                    if len(routes) >= 3:
+                        return routes[:3]
+                elif fallback is None or overlap < fallback[0]:
+                    fallback = (overlap, candidate)
+        if len(routes) >= 3 or attempts >= MAX_VIA_REQUESTS:
+            break
     if len(routes) < 3 and fallback is not None and fallback[0] < 0.9:
         routes.append(fallback[1])
+    if len(routes) < 3:
+        logger.info("Routing returned %s distinct route(s)", len(routes))
     return routes[:3]
 
 

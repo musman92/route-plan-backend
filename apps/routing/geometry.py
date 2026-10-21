@@ -158,12 +158,12 @@ def overlap_ratio(left: Track, right: Track) -> float:
     return close / len(samples)
 
 
-def via_points(track: Track) -> list[tuple[float, float]]:
+def via_points(track: Track, scale: float = 1.0) -> list[tuple[float, float]]:
     """Points offset from the route, used when the router returns fewer than three roads."""
     total = track.distance_miles
-    if total < 40:
+    if total < 20:
         return []
-    offset = max(12.0, min(60.0, total * 0.06))
+    offset = max(8.0, min(60.0, total * 0.06)) * scale
     points: list[tuple[float, float]] = []
     for fraction in (0.5, 0.33, 0.67):
         spot = point_at(track, total * fraction)

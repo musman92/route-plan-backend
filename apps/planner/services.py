@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import math
-import time
 from datetime import datetime, timedelta, timezone
 
 from django.utils import timezone as dj_timezone
 
-from apps.risk.rules import RISK_NAME, assess, recommendation_key, score_checkpoints
+from apps.risk.rules import RISK_NAME, assess, explain_recommendation, score_checkpoints
 from apps.routing.geometry import haversine_miles, sample_track
 from apps.routing.services import (
     LocationNotFound,
@@ -48,7 +47,6 @@ def plan_trip(
 
     try:
         origin_place = geocode(origin)
-        time.sleep(1)
         destination_place = geocode(destination)
         if haversine_miles(
             (origin_place.lon, origin_place.lat),
@@ -82,13 +80,16 @@ def plan_trip(
         _score_route(route, samples, forecasts, departure, load_lbs)
         for route, samples in zip(routes, route_samples)
     ]
-    winner = _winner(scored)
+    winner, reason = _winner(scored)
     return {
         "origin": _place_payload(origin_place),
         "destination": _place_payload(destination_place),
         "departure": _iso(departure),
         "load_lbs": load_lbs,
         "sample_miles": sample_miles,
+        "recommendation": None
+        if winner is None
+        else {"route_id": f"route-{winner + 1}", "reason": reason},
         "routes": [
             _route_payload(index, item, recommended=index == winner)
             for index, item in enumerate(scored)
@@ -137,14 +138,9 @@ def _score_route(route, samples, forecasts, departure, load_lbs):
     return route, checkpoints, score
 
 
-def _winner(scored) -> int | None:
-    order = sorted(
-        range(len(scored)),
-        key=lambda index: recommendation_key(scored[index][2], scored[index][0].track.duration_seconds),
-    )
-    if scored[order[0]][2].average_risk is None:
-        return None
-    return order[0]
+def _winner(scored) -> tuple[int | None, str | None]:
+    entries = [(item[2], item[0].track.duration_seconds) for item in scored]
+    return explain_recommendation(entries)
 
 
 def _route_payload(index: int, item, recommended: bool) -> dict:

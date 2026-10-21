@@ -1,8 +1,9 @@
 from datetime import datetime, timezone
+from unittest.mock import Mock, patch
 
 from django.test import SimpleTestCase
 
-from apps.weather.services import HourlyForecast, _inch_scale, _wind_scale
+from apps.weather.services import HourlyForecast, _inch_scale, _wind_scale, clear_cache, fetch_forecasts
 
 
 class ForecastLookupTests(SimpleTestCase):
@@ -27,3 +28,23 @@ class ForecastLookupTests(SimpleTestCase):
         self.assertEqual(_inch_scale("inch"), 1)
         self.assertAlmostEqual(_inch_scale("cm"), 1 / 2.54)
         self.assertAlmostEqual(_inch_scale("mm"), 1 / 25.4)
+
+    def test_repeated_locations_are_cached(self):
+        clear_cache()
+        self.addCleanup(clear_cache)
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "hourly": {
+                "time": [1_700_000_000],
+                "wind_speed_10m": [10],
+                "rain": [0],
+                "snowfall": [0],
+            },
+            "hourly_units": {"wind_speed_10m": "mph", "rain": "inch", "snowfall": "inch"},
+        }
+        with patch("apps.weather.services.requests.get", return_value=response) as get:
+            first = fetch_forecasts([(41.12341, -87.1)])
+            second = fetch_forecasts([(41.12344, -87.1)])
+        self.assertEqual(get.call_count, 1)
+        self.assertEqual(first.keys(), second.keys())
