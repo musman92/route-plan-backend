@@ -137,7 +137,7 @@ Where the bands share an edge (for example rain at exactly 0.25 in/hr), the valu
 Routes are sorted by:
 
 1. Routes with no usable forecast go last, so missing data is never treated as safe.
-2. Fewest No Travel miles. The brief does not list No Travel in the order, but it is worse than Severe, so it is checked first.
+2. Fewest No Travel miles, because a blocked road is worse than a Severe one.
 3. Fewest Severe miles
 4. Fewest High miles
 5. Lowest average risk
@@ -184,4 +184,3 @@ Use a long Gunicorn timeout: one plan makes several calls to outside services an
 - The public OSRM and Nominatim servers are rate-limited and best-effort; heavy use needs self-hosted or paid providers.
 - OSRM's car profile is used. It does not know about truck restrictions such as height, weight, or hazmat limits.
 - Open-Meteo forecasts cover seven days. Checkpoints with ETAs past that are shown as unavailable.
-- Results are not cached, so repeating the same request calls the outside services again.

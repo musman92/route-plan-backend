@@ -153,12 +153,10 @@ def score_checkpoints(markers: list[tuple[float, Risk | None]]) -> RouteScore:
 
 
 def recommendation_key(score: RouteScore, duration_seconds: float) -> tuple[float, ...]:
-    """No-travel miles rank first because that level is worse than severe.
+    """No-travel miles rank first because a blocked road is worse than a severe one.
 
-    The brief lists severe miles, high miles, average risk, then travel time.
-    No-travel miles are checked before severe miles so a blocked road cannot win
-    just by having fewer severe miles. A route with no scored weather sorts
-    after every scored route, so a missing forecast is not treated as zero risk.
+    A route with no scored weather sorts after every scored route, so a missing
+    forecast is not treated as zero risk.
     """
     average = score.average_risk
     unscored = 0.0 if average is not None else 1.0
